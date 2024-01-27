@@ -1,4 +1,8 @@
+
+use chrono::Utc;
 use log::warn;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 const DIFFICULTY_PREFIX: &str = "00";
 
@@ -10,7 +14,7 @@ fn hash_to_binary_representation(hash: &[u8]) -> String {
     res
 }
 pub struct App {
-    pub blocks: Vec,
+    pub blocks: Vec<Block>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -45,7 +49,7 @@ impl App {
         if self.is_block_valid(&block, latest_block) {
             self.blocks.push(block);
         } else {
-            error!("could not add block - invalid");
+            log::error!("could not add block - invalid");
         }
     }
 
@@ -54,7 +58,7 @@ impl App {
             warn!("block with id: {} has wrong previous hash", block.id);
             return false;
         } else if !hash_to_binary_representation(
-            &hex::decode(&block_hash).expect("can decode from hex"),
+            &hex::decode(&block.hash).expect("can decode from hex"),
         )
         .starts_with(DIFFICULTY_PREFIX)
         {
@@ -81,6 +85,86 @@ impl App {
     }
 
     fn is_chain_valid(&self,  chain: &[Block]) -> bool {
-        //TODO: finsh
+        for i in 0..chain.len() {
+            if i == 0 {
+                continue;
+            }
+            let first = chain.get(i - 1).expect("has to exist");
+            let second = chain.get(i).expect("has to exist");
+            if !self.is_block_valid(second, first) {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn choose_chain(&mut self, local: Vec<Block>, remote: Vec<Block>) -> Vec<Block> {
+        let is_local_valid = self.is_chain_valid(&local);
+        let is_remote_valid = self.is_chain_valid(&remote);
+
+        if is_local_valid && is_remote_valid {
+            if local.len() >= remote.len() {
+                local
+            } else {
+                remote
+            }
+        } else if is_remote_valid && !is_local_valid {
+            remote
+        } else if !is_remote_valid && is_local_valid {
+            local
+        } else {
+            panic!("local and remote chains are both invalid");
+        }
+    }
+}
+
+impl Block {
+    pub fn new(id: u64, previous_hash: String, data: String) -> Self {
+        let now = Utc::now();
+        let (nonce, hash) = Self::mine_block(id, now.timestamp(), &previous_hash, &data);
+        Self {
+            id,
+            hash,
+            timestamp: now.timestamp(),
+            previous_hash,
+            data,
+            nonce,
+        }
+    }
+
+    fn mine_block(id: u64, timestamp: i64, previous_hash: &str, data: &str) -> (u64, String) {
+        log::info!("mining block...");
+        let mut nonce = 0;
+    
+        loop {
+            if nonce % 100000 == 0 {
+                log::info!("nonce: {}", nonce);
+            }
+            let hash = Self::calculate_hash(id, timestamp, previous_hash, data, nonce);
+            let binary_hash = hash_to_binary_representation(&hash);
+            if binary_hash.starts_with(DIFFICULTY_PREFIX) {
+                log::info!(
+                    "mined! nonce: {}, hash: {}, binary hash: {}",
+                    nonce,
+                    hex::encode(&hash),
+                    binary_hash
+                );
+                return (nonce, hex::encode(hash));
+            }
+            nonce += 1;
+        }
+    }
+
+    fn calculate_hash(id: u64, timestamp: i64, previous_hash: &str, data: &str, nonce: u64) -> Vec<u8> {
+        let data = serde_json::json!({
+            "id": id,
+            "previous_hash": previous_hash,
+            "data": data,
+            "timestamp": timestamp,
+            "nonce": nonce
+        });
+        let mut hasher = Sha256::new();
+        hasher.update(data.to_string().as_bytes());
+        hasher.finalize().as_slice().to_owned()
     }
 }
